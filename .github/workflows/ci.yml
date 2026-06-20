@@ -1,0 +1,43 @@
+name: CI
+
+# Build + typecheck GATE for CanvasIO.
+#
+# This workflow verifies the app builds and type-checks before any release. The
+# autonomous Doctor repair loop (scripts/auto-repair.mjs) pushes a fix to main,
+# waits for THIS run to go green, and only then runs the signed `npm run release`
+# so the installed app receives the repair as a real auto-update.
+#
+# Signing / notarization happen LOCALLY via `npm run release`, NOT in CI.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (renderer)
+        run: npx tsc -p tsconfig.web.json --noEmit
+
+      - name: Typecheck (main + preload)
+        run: npx tsc -p tsconfig.node.json --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Main-process smoke (node --check)
+        run: node --check out/main/index.js

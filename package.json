@@ -1,0 +1,51 @@
+{
+  "name": "canvasio",
+  "version": "0.1.2",
+  "description": "CanvasIO — an infinite canvas for orchestrating AI coding agents with your voice.",
+  "main": "./out/main/index.js",
+  "author": "Nachx639",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:watch": "node --import tsx --test --watch \"src/**/*.test.ts\"",
+    "setup:voice": "bash scripts/setup-voice.sh",
+    "repair": "node scripts/auto-repair.mjs",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
+    "package": "electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir",
+    "dist": "electron-vite build && APPLE_KEYCHAIN_PROFILE=\"${APPLE_KEYCHAIN_PROFILE:-canvasio-notary}\" electron-builder --mac",
+    "release": "electron-vite build && APPLE_KEYCHAIN_PROFILE=\"${APPLE_KEYCHAIN_PROFILE:-canvasio-notary}\" electron-builder --mac --publish always"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/addon-webgl": "^0.18.0",
+    "@xterm/xterm": "^5.5.0",
+    "electron-updater": "^6.8.9",
+    "nanoid": "^5.0.9",
+    "node-pty": "^1.0.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^39.8.10",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.17",
+    "tsx": "4.22.4",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}

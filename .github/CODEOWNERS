@@ -1,0 +1,11 @@
+# Default owner for everything in the repo.
+* @Nachx639
+
+# Security-sensitive paths require the owner's review.
+/.github/            @Nachx639
+/src/main/           @Nachx639
+/src/preload/        @Nachx639
+/package.json        @Nachx639
+/package-lock.json   @Nachx639
+/electron-builder.yml @Nachx639
+/scripts/            @Nachx639

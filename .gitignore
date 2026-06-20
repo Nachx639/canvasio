@@ -1,0 +1,24 @@
+node_modules/
+out/
+dist-app/
+dist/
+*.log
+.DS_Store
+.vite/
+*.tsbuildinfo
+.release-lock
+release.lock
+.release.lock
+
+# Secrets & signing material — never commit (this is a public repo)
+.env
+.env.*
+*.pem
+*.p12
+*.pfx
+*.cer
+*.crt
+*.key
+*.keystore
+*.mobileprovision
+id_rsa*

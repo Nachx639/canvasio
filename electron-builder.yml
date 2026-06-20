@@ -1,0 +1,89 @@
+appId: dev.canvasio.app
+productName: CanvasIO
+directories:
+  buildResources: build
+  output: dist-app
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{.eslintrc,.prettierrc,.editorconfig}'
+  # Don't ship Windows node-pty prebuilds inside the mac app (only darwin-* are needed).
+  - '!**/node_modules/node-pty/prebuilds/win32-*/**'
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+# Ship the persistent Kokoro TTS sidecar so it lands at
+# <App>.app/Contents/Resources/scripts/kokoro_tts.py — i.e.
+# join(process.resourcesPath, 'scripts', 'kokoro_tts.py'), the packaged path
+# that voice.ts `kokoroScriptPath()` resolves.
+extraResources:
+  - from: scripts/kokoro_tts.py
+    to: scripts/kokoro_tts.py
+mac:
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  # SIGNED + NOTARIZED distribution targets.
+  #   - zip is REQUIRED by electron-updater on mac (the autoUpdater downloads the
+  #     .zip; the .dmg is for human download only).
+  #   - The bare 'dir' target is intentionally NOT persisted here. The dev
+  #     workflow still produces an unsigned ad-hoc bundle via `npm run package`,
+  #     which passes `--dir` on the CLI and so overrides these targets.
+  target:
+    - dmg
+    - zip
+  darkModeSupport: true
+  # Hardened runtime + Gatekeeper assessment off are REQUIRED for notarization.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # 'identity' is intentionally omitted so electron-builder auto-discovers the
+  # "Developer ID Application" certificate from the login keychain. For the
+  # unsigned ad-hoc `npm run package` (--dir) build, run with
+  # CSC_IDENTITY_AUTO_DISCOVERY=false to skip code signing entirely.
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Notarization via Apple's notarytool. With `notarize: true`, electron-builder
+  # 25 resolves notarytool credentials from the environment in priority order:
+  # APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD (+ APPLE_TEAM_ID), then an API key
+  # (APPLE_API_KEY / _KEY_ID / _ISSUER), then a stored keychain profile named in
+  # APPLE_KEYCHAIN_PROFILE. If NONE of these are present it SILENTLY SKIPS
+  # notarization (it does not error) — so the env MUST carry credentials for a
+  # release to actually be notarized. The `npm run dist` / `npm run release`
+  # scripts therefore default APPLE_KEYCHAIN_PROFILE to "canvasio-notary".
+  #
+  # REQUIREMENTS for a signed + notarized release (`npm run release`):
+  #   1. A "Developer ID Application" certificate in the login keychain
+  #      (auto-discovered; see the `identity` note above).
+  #   2. A notarytool keychain profile named "canvasio-notary"
+  #      (created once via:
+  #         xcrun notarytool store-credentials canvasio-notary \
+  #           --apple-id <APPLE_ID_EMAIL> --team-id <APPLE_TEAM_ID> \
+  #           --password <app-specific-password>).
+  #      The release scripts pass this profile via APPLE_KEYCHAIN_PROFILE so
+  #      electron-builder actually performs notarization instead of skipping it.
+  #   3. env GH_TOKEN (or GITHUB_TOKEN) with repo scope for `--publish`.
+  #
+  # The unsigned ad-hoc `--dir` build (`npm run package`) runs with
+  # CSC_IDENTITY_AUTO_DISCOVERY=false and sets no APPLE_KEYCHAIN_PROFILE, so it
+  # is neither signed nor notarized — there is no stapled artifact to notarize
+  # in that mode, and the skip above keeps it from erroring.
+  notarize: true
+  extendInfo:
+    NSMicrophoneUsageDescription: CanvasIO necesita el micrófono para los comandos de voz.
+    NSCameraUsageDescription: No usado.
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+# Auto-update / release feed. electron-updater reads releases from this GitHub
+# repo (the github provider is baked into the packaged app via app-update.yml).
+# PRIVATE-REPO CAVEAT: reading releases from a private repo at runtime needs a
+# GH_TOKEN in the installed app's environment; otherwise publish to a public repo.
+publish:
+  provider: github
+  owner: Nachx639
+  repo: canvasio

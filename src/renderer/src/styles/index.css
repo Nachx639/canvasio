@@ -1,0 +1,1802 @@
+@import '@xterm/xterm/css/xterm.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --node-radius: 14px;
+  --chrome-h: 44px;
+  /* Liquid-glass chrome tokens. --canvasio-accent is set per-theme on
+     documentElement (App.tsx). color-mix lets us tint borders/glows with the
+     live accent while keeping a deterministic dark glass base. */
+  --glass-base: 14, 24, 46;          /* #0e182e rgb — node body-frame base */
+  --glass-spec: 255, 255, 255;       /* top-edge specular highlight */
+  --glass-hairline: rgba(150, 175, 235, 0.14);
+  /* Off-white ("eggshell") for secondary/subtext in node header bars (player,
+     terminals, etc.). The old muted blues read as dark/illegible over the light
+     translucent frost; this stays readable over both frost and dark panels. */
+  --canvasio-subtext: #ece7d6;
+  --glass-float-base: 17, 27, 50;    /* slightly lifted vs node base for the lit translucent read */
+  --glass-radius: 14px;
+
+  /* ── Theme-overridable liquid-glass TINT tokens (defaults = current literals;
+     the default theme is visually IDENTICAL). A [data-theme="…"] block on
+     documentElement (App.tsx) overrides these per theme. ── */
+  --glass-term-tint: 8, 13, 26;      /* .terminal-overlay-box base rgb (was rgba(8,13,26,0.42)) */
+  --glass-term-alpha: 0.48;          /* …its alpha (carries ALL the body tint now) */
+  --glass-body-tint: 6, 11, 22;      /* .node-body rgb (was rgba(6,11,22,0.18)) */
+  --glass-body-alpha: 0.18;          /* …its alpha */
+  --glass-xterm-tint: 6, 11, 22;     /* xterm THEME.background rgb */
+  --glass-xterm-alpha: 0;            /* TRANSPARENT cells: the box tint alone darkens
+                                        the glass so the text area and the mount
+                                        padding read IDENTICAL — no darker "reborde"
+                                        band where xterm cells used to add a 2nd tint. */
+  --glass-spec-top: 0.2;             /* .terminal-overlay-box faint top sheen alpha (was a hard 0.55 line) */
+  --glass-music-card: 17, 24, 43;    /* MusicPlayer nowPlayingCard rgb (was rgba(17,24,43,0.42)) */
+  --glass-music-card-alpha: 0.42;
+}
+
+/* ── Obsidian Glass — smoked near-black volcanic-glass theme. Overrides ONLY the
+   theme-overridable tint/specular tokens; the frost mechanism (BackdropFrost /
+   NodeFrost) and all geometry (HEADER 34 / BORDER 1 / radius 14) are untouched. ── */
+html[data-theme='obsidian'] {
+  --glass-base: 8, 9, 13;
+  --glass-float-base: 12, 13, 18;
+  --glass-term-tint: 6, 7, 10;
+  --glass-term-alpha: 0.62;
+  --glass-body-tint: 6, 7, 10;
+  --glass-body-alpha: 0.26;
+  --glass-xterm-tint: 5, 6, 9;
+  --glass-xterm-alpha: 0.40;
+  --glass-spec-top: 0.72;
+  --glass-hairline: rgba(150, 140, 180, 0.16);
+  --glass-music-card: 10, 10, 16;
+  --glass-music-card-alpha: 0.55;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #070d1c;
+  color: #e8eefc;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--canvasio-accent, #5b8cff);
+  outline-offset: 2px;
+}
+
+/* ---------- App shell ---------- */
+.app-root {
+  position: relative;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* ---------- Canvas ---------- */
+.canvas-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: default;
+}
+.canvas-viewport.panning {
+  cursor: grabbing;
+}
+/* Loupe — Drag-a-Box Marquee Zoom. While Z is held the viewport shows a
+   crosshair (point-and-shoot "zoom into THIS"); the transient rubber-band is a
+   faint glass rect with the accent border, reusing the shared .glass tokens like
+   Slipstream/Watchtower. Self-removes on key-up/Esc -> zero chrome when unused. */
+.canvas-viewport.loupe-armed {
+  cursor: crosshair;
+}
+.loupe-box {
+  border: 1.5px solid var(--canvasio-accent, rgba(130, 160, 230, 0.9));
+  background: rgba(130, 160, 230, 0.1);
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 8px 28px -12px rgba(0, 0, 0, 0.55);
+}
+.canvas-world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  /* NOTE: deliberately NO `will-change: transform` — promoting this to a GPU
+     layer rasterizes it once and scales the texture, which blurs terminal text
+     at any zoom ≠ 1. Without it the browser re-rasterizes crisply per zoom. */
+}
+
+/* ---------- Node ---------- */
+.node {
+  position: absolute;
+  border-radius: var(--node-radius);
+  /* OPAQUE base (no backdrop-filter — see file header note). A top-lit vertical
+     gradient over an rgb base fakes the frosted-panel depth; the real "glass"
+     read comes from the layered border + shadows below, not from blur. A
+     backdrop-filter would force the .node subtree (incl. in-world bodies) into
+     an offscreen bitmap that bilinear-scales at zoom != 1, blurring text. */
+  background:
+    linear-gradient(
+      180deg,
+      rgba(28, 42, 74, 0.96) 0%,
+      rgba(15, 25, 47, 0.97) 16%,
+      rgb(var(--glass-base)) 60%
+    );
+  /* Hairline frame: a 1px border that the inset highlights brighten along the
+     TOP edge for the specular "lit from above" look. Border stays 1px so the
+     TerminalOverlay inset math (BORDER=1) and corner-radius sync are unchanged. */
+  border: 1px solid var(--glass-hairline);
+  box-shadow:
+    /* ambient — soft, large, low */
+    0 24px 60px -18px rgba(0, 0, 0, 0.62),
+    /* key — tighter, darker, grounds the window */
+    0 8px 22px -10px rgba(0, 0, 0, 0.55),
+    /* faint accent glow — theme-tinted, very low alpha at rest */
+    0 0 38px -22px var(--canvasio-accent, rgba(91, 140, 255, 1)),
+    /* outer micro-contrast ring so the hairline reads on bright wallpapers */
+    0 0 0 0.5px rgba(0, 0, 0, 0.35),
+    /* INNER specular: bright 1px along the top edge */
+    inset 0 1px 0 rgba(var(--glass-spec), 0.1),
+    /* INNER sheen: faint full-frame inner glow for the "sealed glass" look */
+    inset 0 0 0 1px rgba(var(--glass-spec), 0.025),
+    /* INNER bottom shade so the panel has a subtle floor */
+    inset 0 -10px 24px -20px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+/* TERMINAL frame = flat GLASS tint (matches the screen-space body box), NOT the
+   opaque blue base. The terminal body is the z-30 glass box, so this in-world
+   frame only shows at the header, the 1px edge ring, and — crucially — in the
+   rounded-corner TRIANGLES a front window leaves when it occludes this one. With
+   the opaque base those triangles read as black "piquitos"; as the same glass
+   tint they blend with the surrounding frosted glass. Non-terminal nodes
+   (markdown/folder/calendar) keep the opaque base for content legibility. */
+.node-terminal {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  /* Near-invisible frame edge: the bright 1px hairline read as a lighter "band"
+     at the window sides/top against the uniform glass body. Drop it almost to
+     nothing — the drop shadow + occlusion still separate windows.
+     FIX (adjacent-window separation): a CLEAR hairline returns the "band". A DARK
+     hairline instead RECEDES — it reads as a seam/shadow, never as a specular
+     highlight. This in-world edge only surfaces where the z-30 box does NOT cover:
+     the header strip and the rounded-corner occlusion triangles (radius 14). The
+     real adjacent-edge separator lives on .terminal-overlay-box (see below). */
+  border-color: rgba(0, 0, 0, 0.22);
+}
+/* The screen-space glass box (z-30) is inset 1px from the frame so the in-world
+   border stays visible, and it's clipped to holes where front windows occlude.
+   In BOTH gaps the in-world .node-body shows — so it MUST carry the SAME tint as
+   the box (0.48), or that 1px ring + occlusion holes read as a LIGHTER, less-
+   opaque band ("doble fondo"): the body was 0.18 (it used to mirror the old xterm
+   theme bg, but that tint moved to the box). Matching it makes the terminal one
+   uniform glass surface edge-to-edge. */
+.node-terminal .node-body {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+}
+/* Unify the HEADER with the body. The default header paints an OPAQUE blue wash
+   (rgba(40,58,98,0.55)) — a different opacity AND tone than the body's 0.48
+   neutral glass, so the two read as "two frosts" with a band at the header/body
+   seam. Drop the blue wash (the .node-terminal 0.48 base shows through instead,
+   matching the body exactly) and soften the divider so there's no line. */
+.node-terminal .node-header {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-spec), 0.05) 0%,
+    rgba(var(--glass-spec), 0) 70%
+  );
+  border-bottom-color: rgba(var(--glass-spec), 0.05);
+}
+
+/* COLLAPSED CHIP — a SQUARE liquid-glass tile (macOS-Stack style). Byte-identical
+   glass to .node-terminal: the neutral translucent tint rgba(var(--glass-term-tint),
+   var(--glass-term-alpha)) (8,13,26 @ 0.48), a near-invisible 0.05 hairline, the
+   --node-radius (14px) corners, and a SOFT top sheen — NO opaque blue, NO hard
+   specular recuadro. The NodeFrost <canvas> inside paints the in-world blurred
+   wallpaper as the bottom layer (overflow:hidden clips it to the radius), so it
+   reads as the same glass as the terminals/music/markdown nodes. The square shape
+   comes from COLLAPSED_CHIP_W === COLLAPSED_CHIP_H in NodeView.tsx. */
+.node-collapsed-chip {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  border: 1px solid rgba(150, 175, 235, 0.05);
+  border-radius: var(--node-radius);
+  box-sizing: border-box;
+  box-shadow:
+    0 12px 26px -14px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(var(--glass-spec), 0.07);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+/* Faint top→down sheen — the SOFT one cloned from .node-terminal .node-header,
+   not a 1px highlight. Sits above the frost canvas, below the glyph. */
+.node-collapsed-chip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-spec), 0.05) 0%,
+    rgba(var(--glass-spec), 0) 70%
+  );
+}
+.node-collapsed-chip.selected {
+  border-color: color-mix(in srgb, var(--canvasio-accent, #5b8cff) 70%, transparent);
+  box-shadow:
+    0 16px 34px -14px rgba(0, 0, 0, 0.62),
+    0 0 26px -12px var(--canvasio-accent, rgba(91, 140, 255, 1)),
+    inset 0 1px 0 rgba(var(--glass-spec), 0.14),
+    inset 0 0 0 1px rgba(var(--glass-spec), 0.03);
+}
+/* filename INSIDE the glass tile, below the icon — WHITE for legibility over the
+   frosted wallpaper, with a soft shadow so it reads on any background. */
+.node-collapsed-chip-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: 0.1px;
+  line-height: 1.1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+.node.selected {
+  border-color: color-mix(in srgb, var(--canvasio-accent, #5b8cff) 55%, transparent);
+  box-shadow:
+    0 28px 70px -16px rgba(0, 0, 0, 0.7),
+    0 8px 22px -10px rgba(0, 0, 0, 0.55),
+    /* accent glow — brighter than rest state */
+    0 0 46px -14px var(--canvasio-accent, rgba(91, 140, 255, 1)),
+    0 0 0 1px color-mix(in srgb, var(--canvasio-accent, #5b8cff) 42%, transparent),
+    inset 0 1px 0 rgba(var(--glass-spec), 0.14),
+    inset 0 0 0 1px rgba(var(--glass-spec), 0.03),
+    inset 0 -10px 24px -20px rgba(0, 0, 0, 0.6);
+}
+/* Lighthouse — Spotlight Focus Mode. When one node is the "star", every OTHER
+   node (and its terminal canvas) recedes so the active agent reads noise-free.
+   Pure CSS opacity/blur — no geometry, no IPC. Reuses the 0.18s ease language
+   already used across the node chrome. pointer-events:none on dimmed nodes lets
+   clicks fall through to the canvas so the user stays focused on the star. */
+.node.dimmed,
+.terminal-overlay-box.dimmed {
+  opacity: 0.28;
+  filter: saturate(0.6) blur(0.5px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, filter 0.18s ease;
+}
+.node.spotlit {
+  border-color: color-mix(in srgb, var(--canvasio-accent, #5b8cff) 70%, transparent);
+  box-shadow:
+    0 30px 76px -16px rgba(0, 0, 0, 0.85),
+    0 8px 22px -10px rgba(0, 0, 0, 0.6),
+    0 0 60px -10px var(--canvasio-accent, rgba(91, 140, 255, 1)),
+    0 0 0 1px color-mix(in srgb, var(--canvasio-accent, #5b8cff) 52%, transparent),
+    inset 0 1px 0 rgba(var(--glass-spec), 0.16),
+    inset 0 0 0 1px rgba(var(--glass-spec), 0.03);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #cdd9f5;
+  /* Hairline divider to the body — kept faint so the frosted strip floats. */
+  border-bottom: 1px solid rgba(130, 160, 230, 0.12);
+  cursor: grab;
+  /* Frosted strip: top specular sheen fading into a faint translucent wash.
+     No backdrop-filter (would blur header text under canvas scale); the layered
+     gradients over the solid .node base give the frosted read instead. */
+  background:
+    linear-gradient(
+      180deg,
+      rgba(var(--glass-spec), 0.1) 0%,
+      rgba(var(--glass-spec), 0.035) 40%,
+      rgba(var(--glass-spec), 0) 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(40, 58, 98, 0.55) 0%,
+      rgba(20, 32, 60, 0.35) 100%
+    );
+  /* A 1px bright specular line riding the very top of the header glass. */
+  box-shadow: inset 0 1px 0 rgba(var(--glass-spec), 0.07);
+}
+.node-header:active {
+  cursor: grabbing;
+}
+.node-body {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  /* Mirror the translucent xterm tint EXACTLY (same rgba as TerminalOverlay's
+     THEME.background) so the 1px the overlay is inset by (to keep the frame
+     border visible), the resize-gap fill, and occlusion holes read as the same
+     glass instead of the node's blue (#0e1a34) or solid dark. Through an
+     occlusion clip hole this translucent body reads as "covered by the front
+     window." Do NOT add backdrop-filter here: .node-body lives inside
+     scale(zoom) and a backdrop-filter under CSS scale bitmap-blurs text — the
+     real frost lives on the screen-space .terminal-overlay-box. */
+  background: rgba(var(--glass-body-tint), var(--glass-body-alpha));
+}
+.node-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+/* Atlas — Semantic Zoom Glance Card. Rendered IN-WORLD (inside scale(zoom)) by
+   NodeView inside .node-body when the camera is zoomed out past LOD_ZOOM and the
+   terminal's xterm overlay is suspended. Because it is painted in-world it scales
+   with the camera, so it must be sized in WORLD px to read at the low-zoom band
+   (~0.25–0.45) — the values below are tuned to stay legible there. It fills the
+   node body and sits over its #070c18 surface so it reads as the node content. */
+.glance-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 24px;
+  background: #070c18;
+  color: #d7e1f7;
+  overflow: hidden;
+}
+.glance-card-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.glance-card .node-status-dot {
+  width: 18px;
+  height: 18px;
+}
+.glance-card-title {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #eaf1ff;
+  font-weight: 700;
+  font-size: 34px;
+  letter-spacing: 0.01em;
+}
+.glance-card-line {
+  color: #7e93bf;
+  font-weight: 500;
+  font-style: italic;
+  font-size: 26px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+/* Timefold — Canvas Time Machine. The frozen "as-of T" overlay reuses the Atlas
+   Glance Card surface (so it sits over the live body and stays crisp inside
+   scale(zoom)) but tints it cool + dashed to read unmistakably as "the past". */
+.timefold-frozen {
+  background: linear-gradient(180deg, #060a16 0%, #0a1124 100%);
+  box-shadow: inset 0 0 0 2px rgba(124, 151, 224, 0.28);
+}
+.timefold-frozen .glance-card-title {
+  color: #cfdcff;
+}
+.timefold-frozen-stamp {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(124, 151, 224, 0.16);
+  border: 1px solid rgba(124, 151, 224, 0.32);
+  color: #aebbd6;
+  font-weight: 700;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The scrubber's faint event tick marks (where real output/transitions occurred). */
+.timefold-tick {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  margin-left: -0.5px;
+  background: rgba(124, 151, 224, 0.34);
+}
+
+.node-close {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--canvasio-subtext);
+  opacity: 0.85;
+}
+.node-close:hover {
+  background: rgba(255, 90, 90, 0.18);
+  color: #ff9a9a;
+  opacity: 1;
+}
+
+/* Watchtower — the "👁 Vigilar" toggle in the node header. Quiet until hovered;
+   tinted accent when this node is actively pinned in the watch panel. */
+.node-watch {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--canvasio-subtext);
+  opacity: 0.7;
+  flex: 0 0 auto;
+  transition: background 120ms ease, opacity 120ms ease, color 120ms ease;
+}
+.node-watch:hover {
+  background: rgba(120, 160, 255, 0.18);
+  color: #cfe0ff;
+  opacity: 1;
+}
+.node-watch.active {
+  opacity: 1;
+  color: #fff;
+  background: var(--canvasio-accent, rgba(120, 160, 255, 0.85));
+}
+
+/* resize handles
+   Hit areas are generously sized so every edge/corner is easy to grab, but the
+   handles themselves stay invisible until the node is hovered, at which point a
+   faint accent reveals where to drag (strongest on the SE corner). */
+.resize-handle {
+  position: absolute;
+  z-index: 5;
+  /* Reveal subtle visual hints only on node hover. */
+  opacity: 0;
+  transition: opacity 0.18s ease, background-color 0.18s ease;
+}
+/* Edge handles (n/s/e/w): wider, easy-to-grab hit zones. */
+.resize-handle.e {
+  right: -5px;
+  top: 6px;
+  bottom: 6px;
+  width: 11px;
+  cursor: ew-resize;
+}
+.resize-handle.s {
+  bottom: -5px;
+  left: 6px;
+  right: 6px;
+  height: 11px;
+  cursor: ns-resize;
+}
+.resize-handle.w {
+  left: -5px;
+  top: 6px;
+  bottom: 6px;
+  width: 11px;
+  cursor: ew-resize;
+}
+.resize-handle.n {
+  top: -5px;
+  left: 6px;
+  right: 6px;
+  height: 11px;
+  cursor: ns-resize;
+}
+/* Corner handle (se): largest hit zone, sits above the edges. */
+.resize-handle.se {
+  right: -5px;
+  bottom: -5px;
+  width: 20px;
+  height: 20px;
+  z-index: 6;
+  cursor: nwse-resize;
+}
+
+/* On node hover, gently reveal the handles. */
+.node:hover .resize-handle {
+  opacity: 1;
+}
+/* Faint accent on edge handles when hovering the edge itself. */
+.resize-handle.n:hover,
+.resize-handle.s:hover,
+.resize-handle.e:hover,
+.resize-handle.w:hover {
+  background: rgba(120, 160, 255, 0.18);
+  border-radius: 3px;
+}
+/* SE corner gets a small visible grip glyph drawn with a gradient. */
+.resize-handle.se::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 11px;
+  height: 11px;
+  border-right: 2px solid rgba(140, 175, 255, 0.45);
+  border-bottom: 2px solid rgba(140, 175, 255, 0.45);
+  border-bottom-right-radius: 5px;
+  transition: border-color 0.18s ease;
+}
+.resize-handle.se:hover::after {
+  border-right-color: rgba(150, 185, 255, 0.85);
+  border-bottom-color: rgba(150, 185, 255, 0.85);
+}
+/* Keep handles revealed while the node is selected for easier resizing. */
+.node.selected .resize-handle {
+  opacity: 1;
+}
+
+/* ---------- terminal (screen-space overlay) ----------
+   The xterm <canvas> is rendered in a viewport-fixed, UN-transformed overlay
+   layer that is a SIBLING of .canvas-world. This is the definitive crispness
+   fix: a <canvas> inside a CSS-scaled (and rounded/clipped) ancestor gets
+   bitmap-scaled by the GPU and blurs at any zoom != 1. Mounting it in screen
+   space at integer device-pixel coordinates with NO CSS scale composites it 1:1
+   with the device pixel grid, so it is crisp whether zoomed in or out. */
+.terminal-overlays {
+  position: fixed;
+  inset: 0;
+  /* Container is click-through; each box re-enables pointer events so typing /
+     selection work. Sits above the world, below the drawing overlays + chrome. */
+  pointer-events: none;
+  z-index: 30;
+}
+/* One box per terminal node, positioned imperatively at the node BODY's screen
+   rect (left/top/width/height set from the camera each frame). NO transform and
+   NO CSS scale — the box is at real device pixels. The rounded BOTTOM corners
+   are applied at scale 1, which does NOT blur the canvas child (a rounded
+   overflow clip only blurs when the surface is itself being scaled). */
+.terminal-overlay-box {
+  position: absolute;
+  pointer-events: auto;
+  overflow: hidden;
+  /* THE liquid-glass surface. This box sits directly behind the transparent
+     WebGL xterm canvas, in screen space (position:fixed parent, z-30, NO
+     transform/scale). The REAL frost is the z-29 BackdropFrost layer — a single
+     BLURRED copy of the wallpaper revealed exactly under this box's visible
+     region (CSS backdrop-filter does NOT frost the GPU-composited canvas/video
+     wallpaper, so it is intentionally absent here). This box only adds the TINT
+     + glass cues over that frost. Tint kept low so the blurred wallpaper genuinely
+     reads through as glass; the composite behind glyphs (blurred wallpaper -> frost
+     tint -> this 0.26 -> xterm 0.18) stays dark enough for ~4.5:1 body text. */
+  /* FLAT tint — no top sheen gradient, no specular insets. Measurement showed
+     the content + padding already composite identically over the frost; the only
+     thing that read as an edge "band" was the sheen/specular at the top + the
+     frame hairline at the sides. A pure flat tint over the frost keeps the
+     terminal one uniform glass surface edge-to-edge. */
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  /* No compensating inset layers: the real cause of the content-vs-padding franja
+     was the agent TUI overriding the default background via OSC 11 (now stripped
+     in TerminalOverlay), so the transparent canvas + the padding now composite the
+     SAME frosted glass. Just a whisper of bottom edge for depth. */
+  /* ADJACENT-WINDOW SEPARATOR (the key piece): an OUTER dark ring on the only
+     surface that's actually visible (this z-30 box). It's a box-shadow (NOT a
+     border) so it follows the box's border-radius and keeps inset/radius in sync
+     with TerminalOverlay.tsx. Why dark, not the old bright hairline: a clear edge
+     SUBmits as a specular "band" over uniform glass; a dark edge RECEDES. Where two
+     boxes butt together, the two adjacent dark rings COMPOSITE (~0.28+0.28) into a
+     clear ~1-2px separation line; over wallpaper a single ring reads only as a
+     discreet edge shadow, not a hard outline. */
+  box-shadow:
+    inset 0 0 0 var(--term-border-w, 1px) rgba(0, 0, 0, 0.28),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+  border-bottom-left-radius: var(--node-radius);
+  border-bottom-right-radius: var(--node-radius);
+}
+/* Focus rim on the spotlit terminal: a thin accent-tinted inner glow on top of
+   the base glass cues so the active agent's glass reads as "lit". */
+.terminal-overlay-box.spotlit {
+  /* This rule REPLACES box-shadow wholesale, so the outer dark separator ring from
+     the base .terminal-overlay-box would be lost on the FOCUSED window — re-include
+     it first (otherwise the active terminal alone loses its adjacent-edge line, a
+     visible regression). Focus cues (specular + accent rim + inner shade) follow. */
+  box-shadow:
+    inset 0 0 0 var(--term-border-w, 1px) rgba(0, 0, 0, 0.28),
+    inset 0 1.5px 0 rgba(var(--glass-spec), 0.6),
+    inset 0 0 0 1px color-mix(in srgb, var(--canvasio-accent, #5b8cff) 30%, transparent),
+    inset 0 -28px 52px -28px rgba(0, 0, 0, 0.34);
+}
+/* Inner xterm mount fills the box with the padding the old .term-host used, so
+   the layout matches the previous look at zoom 1.
+
+   BOTTOM INSET: FitAddon computes rows = floor(availableHeight / cellHeight).
+   With lineHeight 1.12 the cell height is fractional, so the floored last row
+   plus xterm's own viewport sizing can spill the final row UNDER the box's
+   rounded bottom border (the overlay box has overflow:hidden) — Claude Code's
+   footer line ("bypass permissions …") was getting clipped at any window size.
+   We reserve a FULL cell-height of slack at the bottom (~18px ≈ 12.5px font ×
+   1.12 line-height + a px of safety) so the floored last row is always fully
+   above the bottom inset, at any box size and after every resize. FitAddon
+   reads padding off the mount, so the reserved row is excluded from the fit and
+   never re-clipped. */
+.terminal-overlay-mount {
+  position: absolute;
+  inset: 0;
+  /* A clean 7px text margin. The content-vs-padding franja was the agent TUI
+     overriding the default bg via OSC 11 (now stripped) — with that gone the
+     transparent canvas and the padding composite the SAME frosted glass, so the
+     margin reads seamlessly. The bottom keeps a larger reserve so Codex/Claude's
+     status line on the very bottom rows clears the rounded-bottom overflow clip. */
+  padding: 7px 7px 24px 7px;
+  box-sizing: border-box;
+}
+.terminal-overlay-mount .xterm {
+  height: 100%;
+}
+/* LOAD-BEARING: xterm.css ships `.xterm .xterm-viewport { background-color:#000 }`
+   — an opaque black div that would block ALL wallpaper bleed-through and defeat
+   the glass. !important is required to beat xterm.css's specificity. Without
+   this the feature silently does nothing (an opaque black rectangle). */
+.terminal-overlay-mount .xterm,
+.terminal-overlay-mount .xterm .xterm-viewport,
+.terminal-overlay-mount .xterm .xterm-screen {
+  background: transparent !important;
+}
+/* Hide the native xterm scrollbar: it overlaid the rightmost columns and clipped
+   the side of agent TUIs' input fields (Claude Code / Codex draw a full-width
+   prompt box). Agents run in the alt-screen and manage their own scroll; plain
+   shells still scroll with the wheel. Keeps the glass edge clean (no scrollbar
+   gutter over the frost). */
+.terminal-overlay-mount .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ---------- screen-space resize handles ----------
+   Sits ABOVE the terminal overlay (z 30) so the resize grab-zones over a
+   terminal body are reachable again, and BELOW the drawing overlays (z 45).
+   Container + box are click-through; ONLY the 8 grab-zone children re-enable
+   pointer events, so header drag (in-world) and terminal typing (z-30 box)
+   keep receiving events through the transparent center. */
+.resize-overlays {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 31;
+}
+.resize-overlay-box {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* ---------- glass control (FLOATING UI material) ----------
+   Liquid-glass for panels/bars/modals/popovers that float OVER the canvas
+   (never over xterm content or the music video/EQ). Mirrors the .node/.glass-window
+   border + layered-shadow language, but ADDS a tasteful backdrop blur (the frost is
+   real here because these surfaces are NOT inside scale(zoom)). Translucent tinted
+   base keeps text legible; brighter TOP border edge = specular "lit from above". */
+.glass {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(var(--glass-spec), 0.05) 0%,
+      rgba(var(--glass-spec), 0) 42%
+    ),
+    /* Lower alpha so HUD bars read more translucent. backdrop-filter still does
+       NOT frost the canvas/video wallpaper here (same root cause as the terminal
+       box) — so HUD surfaces now publish their screen rect into the BackdropFrost
+       registry via useFrostRect (a ResizeObserver hook, since HUD is React-
+       positioned, not imperatively projected like terminals) and the single z-29
+       blurred layer reveals the frosted wallpaper under them. Keep 0.5 so that
+       frost reads through; raising it would hide the reveal. */
+    rgba(var(--glass-float-base), 0.5);
+  border: 1px solid var(--glass-hairline);
+  border-top-color: rgba(var(--glass-spec), 0.22);
+  border-radius: var(--glass-radius);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow:
+    /* ambient */
+    0 20px 52px -18px rgba(0, 0, 0, 0.6),
+    /* key */
+    0 6px 18px -10px rgba(0, 0, 0, 0.5),
+    /* faint theme-accent glow */
+    0 0 30px -20px var(--canvasio-accent, rgba(91, 140, 255, 1)),
+    /* outer micro-contrast ring (reads on bright wallpapers) */
+    0 0 0 0.5px rgba(0, 0, 0, 0.3),
+    /* inner top specular */
+    inset 0 1px 0 rgba(var(--glass-spec), 0.14),
+    /* inner sealed-glass sheen */
+    inset 0 0 0 1px rgba(var(--glass-spec), 0.03);
+}
+
+/* ---------- glass-solid (OPAQUE lens panels) ----------
+   For HUD/lens panels that overlay busy canvas/terminal content and need
+   guaranteed contrast — no backdrop blur. Same border+shadow language as .glass,
+   over an OPAQUE tinted base so text stays crisp. */
+.glass-solid {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(28, 42, 74, 0.55) 0%,
+      rgb(var(--glass-base)) 60%
+    );
+  border: 1px solid var(--glass-hairline);
+  border-top-color: rgba(var(--glass-spec), 0.22);
+  border-radius: var(--glass-radius);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow:
+    0 24px 60px -18px rgba(0, 0, 0, 0.7),
+    0 8px 22px -10px rgba(0, 0, 0, 0.55),
+    0 0 30px -20px var(--canvasio-accent, rgba(91, 140, 255, 1)),
+    0 0 0 0.5px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(var(--glass-spec), 0.12),
+    inset 0 0 0 1px rgba(var(--glass-spec), 0.03);
+}
+
+/* Liquid-glass WINDOW material — the .node redesign factored into a reusable
+   class for any in-world panel that must stay crisp under canvas scale. Unlike
+   .glass it uses NO backdrop-filter (would blur under scale(zoom)); the frost is
+   faked with layered gradients + shadows. Mirrors the .node rule above. */
+.glass-window {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(28, 42, 74, 0.96) 0%,
+      rgba(15, 25, 47, 0.97) 16%,
+      rgb(var(--glass-base)) 60%
+    );
+  border: 1px solid var(--glass-hairline);
+  box-shadow:
+    0 24px 60px -18px rgba(0, 0, 0, 0.62),
+    0 8px 22px -10px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(var(--glass-spec), 0.1),
+    inset 0 0 0 1px rgba(var(--glass-spec), 0.025);
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ---------- Draggable HUD panel grip ---------- */
+/* A slim band of faint dots at the top of a floating panel that the user grabs to
+   move it. Unobtrusive at rest, slightly brighter on hover; shows the grabbing
+   cursor while a drag is in progress. -webkit-app-region must stay no-drag so the
+   grip moves the PANEL, not the OS window. */
+.panel-grip {
+  -webkit-app-region: no-drag;
+  opacity: 0.55;
+  transition: opacity 0.14s ease;
+  /* The grip must never start a native text-selection and must own touch so a
+     drag is a clean pan, not a scroll/select. (Reinforces the inline styles the
+     useDraggablePanel hook sets on dragHandleProps.) */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.panel-grip:hover {
+  opacity: 0.9;
+}
+.panel-grip:active {
+  cursor: grabbing;
+}
+
+/* ---------- Slipstream: spatial Back/Forward arrows ---------- */
+.slipstream {
+  position: absolute;
+  /* Sit just to the right of ZoomControls (left:16, ~196px wide incl. padding). */
+  left: 226px;
+  bottom: 16px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 11px;
+}
+.slipstream-btn {
+  min-width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: #cdd9f5;
+  border-radius: 7px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.slipstream-btn:hover:not(:disabled) {
+  background: rgba(20, 30, 56, 0.65);
+  color: #fff;
+}
+.slipstream-btn:disabled,
+.slipstream-btn[aria-disabled='true'] {
+  color: rgba(205, 217, 245, 0.28);
+  cursor: default;
+}
+
+/* ---------- Waypoints: spatial bookmark rail ---------- */
+.waypoint-rail {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 240px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 12px;
+}
+.waypoint-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  border-radius: 8px;
+  background: rgba(8, 12, 26, 0.4);
+  border: 1px solid transparent;
+  color: rgba(220, 230, 250, 0.92);
+  font-size: 12px;
+  line-height: 1.2;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.waypoint-chip:hover {
+  border-color: var(--canvasio-accent, rgba(160, 195, 255, 0.6));
+  background: rgba(20, 30, 56, 0.55);
+}
+.waypoint-num {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--canvasio-accent, rgba(120, 160, 255, 0.85));
+  color: #0a0f1e;
+  font-size: 11px;
+  font-weight: 600;
+}
+.waypoint-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+.waypoint-edit {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: rgba(8, 12, 26, 0.7);
+  border: 1px solid var(--canvasio-accent, rgba(160, 195, 255, 0.6));
+  border-radius: 5px;
+  color: inherit;
+  font: inherit;
+  padding: 1px 4px;
+}
+.waypoint-act {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: rgba(180, 195, 225, 0.6);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 4px;
+}
+.waypoint-act:hover {
+  color: rgba(230, 240, 255, 0.95);
+  background: rgba(255, 255, 255, 0.08);
+}
+.waypoint-add {
+  cursor: pointer;
+  color: rgba(200, 215, 245, 0.85);
+  border-style: dashed;
+  border-color: rgba(130, 160, 230, 0.3);
+}
+.waypoint-add:hover {
+  border-style: dashed;
+}
+
+/* ---------- Watchtower: pinned live-watch panel ---------- */
+/* Bottom-right, stacked ABOVE the Minimap (right:16 / bottom:16 / ~108px tall),
+   styled like the WaypointRail / DirectorChip glass. Hidden entirely (component
+   returns null) until a node is pinned, so it adds no chrome when unused. */
+.watchtower {
+  position: absolute;
+  right: 16px;
+  bottom: 140px;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 224px;
+  max-width: 50vw;
+  padding: 7px;
+  border-radius: 12px;
+  pointer-events: auto;
+}
+.watch-head {
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--canvasio-accent, #88aaff);
+  padding: 0 2px 1px;
+  opacity: 0.85;
+}
+.watch-tile {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 6px 7px;
+  border-radius: 9px;
+  background: rgba(8, 12, 26, 0.45);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.watch-tile:hover {
+  border-color: var(--canvasio-accent, rgba(160, 195, 255, 0.6));
+  background: rgba(20, 30, 56, 0.6);
+}
+.watch-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+}
+.watch-body {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.watch-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.watch-glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: rgba(120, 160, 255, 0.18);
+  color: #cfe0ff;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.watch-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #eaf1ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.watch-agent {
+  flex: 0 0 auto;
+  color: #7e93bf;
+  font-size: 10px;
+  font-weight: 500;
+}
+.watch-line {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7e93bf;
+  font-size: 11px;
+  font-style: italic;
+}
+.watch-unpin {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: none;
+  color: rgba(180, 195, 225, 0.55);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+}
+.watch-unpin:hover {
+  color: #ff9a9a;
+  background: rgba(255, 90, 90, 0.18);
+}
+/* An error/waiting tile pulses (box-shadow only — no layout thrash) to grab the
+   eye while you stay heads-down elsewhere. */
+.watch-alert {
+  border-color: rgba(255, 107, 107, 0.5);
+  animation: watch-alert-pulse 1.4s ease-in-out infinite;
+}
+@keyframes watch-alert-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(255, 107, 107, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 107, 107, 0);
+  }
+}
+
+/* ---------- Beacon: command palette (⌘K) ---------- */
+.beacon-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 14vh;
+  background: rgba(6, 10, 22, 0.34);
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+}
+.beacon {
+  width: min(560px, 92vw);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px -20px rgba(0, 0, 0, 0.7);
+  animation: beacon-in 140ms ease-out;
+}
+@keyframes beacon-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.beacon-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid rgba(130, 160, 230, 0.14);
+}
+.beacon-glyph {
+  color: var(--canvasio-accent, #5b8cff);
+  font-size: 15px;
+  opacity: 0.85;
+}
+.beacon-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #eef3ff;
+  font-size: 15px;
+  font-family: inherit;
+}
+.beacon-input::placeholder {
+  color: #7e8eb0;
+}
+.beacon-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+.beacon-empty {
+  padding: 18px 14px;
+  color: #7e8eb0;
+  font-size: 13px;
+  text-align: center;
+}
+.beacon-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 11px;
+  border: none;
+  background: transparent;
+  border-radius: 9px;
+  color: #cdd9f5;
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.beacon-row[data-active='true'] {
+  background: color-mix(in srgb, var(--canvasio-accent, #5b8cff) 22%, transparent);
+  color: #ffffff;
+}
+.beacon-row-icon {
+  width: 18px;
+  text-align: center;
+  color: var(--canvasio-accent, #5b8cff);
+  opacity: 0.9;
+  flex: 0 0 auto;
+}
+.beacon-row[data-active='true'] .beacon-row-icon {
+  color: #ffffff;
+}
+.beacon-row-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.beacon-row-hint {
+  flex: 0 0 auto;
+  color: #7e8eb0;
+  font-size: 11.5px;
+  opacity: 0.85;
+}
+.beacon-row[data-active='true'] .beacon-row-hint {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ---------- quick voice FAB ---------- */
+.voice-fab:focus-visible {
+  outline: 2px solid #9fc1ff;
+  outline-offset: 3px;
+}
+@keyframes voice-fab-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(224, 86, 63, 0.55), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(224, 86, 63, 0), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 86, 63, 0), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+  }
+}
+@keyframes voice-fab-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes voice-fab-speak {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(74, 200, 140, 0.5), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(74, 200, 140, 0), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+  }
+}
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+/* scrollbar default */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(120, 150, 220, 0.22);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- Pulse Radar: off-screen attention beacons ---------- */
+/* Full-viewport layer; transparent and click-through EXCEPT the beacon buttons,
+   so it never blocks canvas interaction. */
+.pulse-radar {
+  position: absolute;
+  inset: 0;
+  z-index: 41;
+  pointer-events: none;
+}
+.pulse-beacon {
+  position: absolute;
+  /* left/top are set inline; recenter the button on that edge point. */
+  transform: translate(-50%, -50%);
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  pointer-events: auto;
+  color: var(--beacon-color, #5b8cff);
+  background: rgba(12, 18, 36, 0.72);
+  border: 1.5px solid var(--beacon-color, #5b8cff);
+  box-shadow:
+    0 0 10px -1px var(--beacon-color, #5b8cff),
+    inset 0 0 6px -2px var(--beacon-color, #5b8cff);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.18s ease;
+}
+.pulse-beacon:hover {
+  transform: translate(-50%, -50%) scale(1.18);
+  box-shadow:
+    0 0 16px 0 var(--beacon-color, #5b8cff),
+    inset 0 0 8px -2px var(--beacon-color, #5b8cff);
+}
+.pulse-beacon__arrow {
+  font-size: 12px;
+  line-height: 1;
+  display: block;
+  /* the glyph ➤ points to the right at 0deg; inline rotate aims it outward. */
+  pointer-events: none;
+}
+/* Soft throb for the urgent states (error / te necesita). */
+.pulse-beacon--throb {
+  animation: pulse-beacon-throb 1.5s ease-in-out infinite;
+}
+@keyframes pulse-beacon-throb {
+  0%,
+  100% {
+    opacity: 0.85;
+    box-shadow:
+      0 0 8px -1px var(--beacon-color, #5b8cff),
+      inset 0 0 6px -2px var(--beacon-color, #5b8cff);
+  }
+  50% {
+    opacity: 1;
+    box-shadow:
+      0 0 20px 2px var(--beacon-color, #5b8cff),
+      inset 0 0 8px -1px var(--beacon-color, #5b8cff);
+  }
+}
+.pulse-beacon-overflow {
+  position: absolute;
+  right: 200px;
+  top: 70px;
+  pointer-events: none;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cdd9f5;
+}
+
+/* ---------- Spyglass: hold-to-peek spatial preview ---------- */
+/* A subtle pulsing ring marks the node currently being PEEKED (transient
+   hold-to-preview). It must read distinctly from the steady selection/spotlight
+   rings so it's clear this is a momentary glance, not a committed focus. Uses the
+   accent color and a gentle breathing animation; pure CSS, no geometry/IPC. */
+.node.peeking {
+  border-color: var(--canvasio-accent, rgba(120, 160, 255, 0.7));
+  animation: spyglass-ring 1.1s ease-in-out infinite;
+}
+@keyframes spyglass-ring {
+  0%,
+  100% {
+    box-shadow:
+      0 22px 60px -10px rgba(0, 0, 0, 0.85),
+      0 0 0 1px var(--canvasio-accent, rgba(120, 160, 255, 0.55)),
+      0 0 26px -6px var(--canvasio-accent, rgba(91, 140, 255, 0.45));
+  }
+  50% {
+    box-shadow:
+      0 22px 60px -10px rgba(0, 0, 0, 0.85),
+      0 0 0 2px var(--canvasio-accent, rgba(120, 160, 255, 0.85)),
+      0 0 48px -2px var(--canvasio-accent, rgba(91, 140, 255, 0.7));
+  }
+}
+
+/* Tiny bottom-center hint chip shown only while a peek is in progress. */
+.spyglass-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 60;
+  pointer-events: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #e6edff;
+  white-space: nowrap;
+  animation: spyglass-hint-in 0.16s ease-out;
+}
+@keyframes spyglass-hint-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ---------- Jump Hints: ace-jump teleport badges ---------- */
+/* A full-viewport, pointer-transparent layer that only mounts while jump mode is
+   on (zero chrome/cost when off). It holds the per-node label badges, each
+   absolutely positioned at its node's screen-space top-left. */
+.jump-hints-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  pointer-events: none;
+}
+/* A small glass badge (reusing the shared .glass tokens + --canvasio-accent) with a
+   one-frame fade-in, mirroring the spyglass-hint / beacon-row-hint aesthetic. */
+.jump-hint {
+  position: absolute;
+  min-width: 18px;
+  height: 20px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border-color: var(--canvasio-accent, rgba(160, 195, 255, 0.6));
+  box-shadow:
+    0 0 0 1px var(--canvasio-accent, rgba(120, 160, 255, 0.5)),
+    0 6px 18px -8px rgba(0, 0, 0, 0.7);
+  color: #e6edff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  pointer-events: none;
+  animation: jump-hint-in 0.12s ease-out;
+}
+/* Already-typed prefix recedes so the next key to press is the bright one. */
+.jump-hint-typed {
+  color: var(--canvasio-accent, #7c97e0);
+  opacity: 0.55;
+}
+/* Pipeline Walk branch-picker badges: same glass badge as JumpHints, tinted a
+   warmer relay-conduit hue so a branch choice reads as "follow the handoff" rather
+   than a generic ace-jump teleport. Reuses every other .jump-hint token. */
+.pipeline-hint {
+  border-color: rgba(255, 196, 128, 0.7);
+  box-shadow:
+    0 0 0 1px rgba(255, 176, 96, 0.6),
+    0 6px 18px -8px rgba(0, 0, 0, 0.7);
+}
+@keyframes jump-hint-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---------- Atlas: Hold-O Spatial Overview (Exposé for the canvas) ---------- */
+/* A full-viewport glass survey that reframes every node as a large, readable,
+   live tile laid out to fit at once. Sits above the canvas chrome but below the
+   Beacon palette (z 200). Conditionally mounted (no chrome / no cost when
+   inactive), so these rules only apply while Atlas is open. */
+.atlas-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 72px 40px 56px;
+  background: rgba(6, 10, 22, 0.52);
+  backdrop-filter: blur(10px) saturate(1.15);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+  animation: atlas-fade-in 0.12s ease-out;
+}
+.atlas-hint {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(214, 226, 255, 0.72);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+.atlas-grid {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 1280px;
+  align-content: center;
+  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  overflow: auto;
+}
+.atlas-tile {
+  -webkit-app-region: no-drag;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 96px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border-color: rgba(130, 160, 230, 0.2);
+  text-align: left;
+  cursor: pointer;
+  color: #e6edff;
+  transition:
+    transform 0.08s ease-out,
+    box-shadow 0.12s ease-out,
+    opacity 0.12s ease-out;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 10px 30px -14px rgba(0, 0, 0, 0.7);
+}
+.atlas-tile:hover,
+.atlas-tile:focus-visible {
+  transform: translateY(-2px);
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--atlas-accent, rgba(160, 195, 255, 0.6)),
+    0 14px 36px -14px rgba(0, 0, 0, 0.8);
+}
+.atlas-tile[data-dim='true'] {
+  opacity: 0.28;
+}
+.atlas-tile[data-hot='true'] {
+  box-shadow:
+    0 0 0 1px rgba(242, 200, 75, 0.45),
+    0 14px 36px -14px rgba(0, 0, 0, 0.8);
+}
+.atlas-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.atlas-glyph {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--atlas-accent, #7c97e0);
+  opacity: 0.9;
+}
+.atlas-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.atlas-status-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(8, 12, 26, 0.6);
+}
+.atlas-status-dot[data-working='true'] {
+  animation: atlas-pulse 1.2s ease-in-out infinite;
+}
+.atlas-sub {
+  flex: 1 1 auto;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(200, 214, 248, 0.66);
+}
+.atlas-label {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  min-width: 18px;
+  height: 20px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(10, 16, 32, 0.72);
+  border: 1px solid var(--atlas-accent, rgba(160, 195, 255, 0.55));
+  box-shadow: 0 0 0 1px var(--atlas-accent, rgba(120, 160, 255, 0.4));
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: #e6edff;
+}
+.atlas-label-typed {
+  color: var(--atlas-accent, #7c97e0);
+  opacity: 0.55;
+}
+@keyframes atlas-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes atlas-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* ---------- Constellation Filter: live in-canvas search & isolate ---------- */
+/* A slim glass pill, top-center, reusing the shared .glass tokens. Hidden via
+   conditional mount (no chrome when unused), so these rules only apply while the
+   filter is open. */
+.constellation-filter {
+  position: fixed;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-radius: 999px;
+  animation: constellation-in 0.16s ease-out;
+}
+@keyframes constellation-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.constellation-glyph {
+  font-size: 14px;
+  color: var(--canvasio-accent, #7c97e0);
+  flex: 0 0 auto;
+  line-height: 1;
+}
+.constellation-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #eaf1ff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  width: 200px;
+  min-width: 120px;
+}
+.constellation-input::placeholder {
+  color: #6f80a8;
+  font-weight: 500;
+}
+.constellation-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8398c4;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.constellation-close {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(130, 160, 230, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #b9c7ee;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.constellation-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #eaf1ff;
+}
+
+/* ============================================================
+   LIQUID GLASS — non-terminal components (music/notes/folders/
+   calendar + bars), made IDENTICAL to the terminal glass.
+   (generated by the liquid-glass-everywhere workflow)
+   ============================================================ */
+/* ---- MusicPlayer (Reproductor) — identical terminal liquid glass ----
+   Byte-identical to the .node-terminal rules (index.css :170-199): only the
+   selector changes (-terminal -> -music). These make the node FRAME, HEADER and
+   BODY read as one neutral translucent glass surface so the in-body <NodeFrost>
+   (already gated for kind 'music' in NodeView) shows through, dropping the
+   default opaque blue base + the blue header wash + their seams. */
+.node-music {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  border-color: rgba(150, 175, 235, 0.05);
+}
+.node-music .node-body {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+}
+.node-music .node-header {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-spec), 0.05) 0%,
+    rgba(var(--glass-spec), 0) 70%
+  );
+  border-bottom-color: rgba(var(--glass-spec), 0.05);
+}
+
+/* ============================================================
+   MARKDOWN NOTE — liquid-glass (clone of the .node-terminal glass)
+   These three rules make the markdown node read as the SAME frosted
+   glass as a terminal: a single neutral translucent tint over the
+   in-world <NodeFrost> NodeView renders behind it. Byte-identical
+   shapes to .node-terminal / .node-terminal .node-body /
+   .node-terminal .node-header — only the selector changes.
+   ============================================================ */
+
+/* (1) Translucent BODY-FRAME tint — replaces the opaque blue base so the
+   frost shows through. Same token + alpha as the terminal. */
+.node-markdown {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  border-color: rgba(150, 175, 235, 0.05);
+}
+
+/* (2) Same translucent tint on the body so the frost reads as one surface.
+   This is the layer that sits OVER the NodeFrost canvas (zIndex:0). */
+.node-markdown .node-body {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+}
+
+/* (3) NEUTRAL header — drop the default opaque blue wash; faint spec-only
+   sheen so the 0.48 base shows through and the header matches the body. */
+.node-markdown .node-header {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-spec), 0.05) 0%,
+    rgba(var(--glass-spec), 0) 70%
+  );
+  border-bottom-color: rgba(var(--glass-spec), 0.05);
+}
+
+/* The MarkdownNode's own inner wrapper carries the same translucent glass
+   tint (it fully covers .node-body, so it must match it to read as one
+   plane). The header/editor/preview text layers paint ABOVE this and stay
+   crisp/legible over the frost (light #cfe0ff text on the 0.48 dark tint,
+   the same composite as a terminal). */
+.markdown-node-surface {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+}
+
+/* --- FOLDER node liquid-glass (clone of .node-terminal* shapes, -terminal -> -folder) --- */
+/* (1) Translucent body-frame tint so the in-world <NodeFrost> shows through. */
+.node-folder {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  border-color: rgba(150, 175, 235, 0.05);
+}
+/* (2) Same translucent tint on the body so frost + body read as one surface. */
+.node-folder .node-body {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+}
+/* (3) Neutral header — drop the opaque blue wash; faint spec-only sheen so the
+   0.48 base shows through and the header matches the body. */
+.node-folder .node-header {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-spec), 0.05) 0%,
+    rgba(var(--glass-spec), 0) 70%
+  );
+  border-bottom-color: rgba(var(--glass-spec), 0.05);
+}
+
+/* CALENDAR glass — byte-identical to the three .node-terminal shapes (index.css
+   lines 170-199), only the selector changes. Makes the in-world calendar read as
+   the SAME glass as the terminal so the per-node <NodeFrost> shows through. */
+.node-calendar {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  border-color: rgba(150, 175, 235, 0.05);
+}
+.node-calendar .node-body {
+  background: rgba(var(--glass-term-tint), var(--glass-term-alpha));
+}
+.node-calendar .node-header {
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-spec), 0.05) 0%,
+    rgba(var(--glass-spec), 0) 70%
+  );
+  border-bottom-color: rgba(var(--glass-spec), 0.05);
+}
+
+/* TopBar arrange-density popover — terminal liquid-glass alignment.
+   Converts the old opaque (#0f1422 + hard 0.28 border + backdrop-filter:none)
+   recuadro into the SAME neutral terminal glass as every other glass surface:
+   it inherits the shared .glass material (z-29 BackdropFrost reveal via
+   useFrostRect + blur(18px) saturate(1.4)), and we re-tint its base with the
+   terminal token so it darkens-not-brightens and keeps its dense menu text
+   legible over the frost. Soft hairline edge, no hard specular line. */
+.topbar-arrange-pop {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(var(--glass-spec), 0.05) 0%,
+      rgba(var(--glass-spec), 0) 70%
+    ),
+    rgba(var(--glass-term-tint), var(--glass-term-alpha));
+  border-color: rgba(150, 175, 235, 0.05);
+}
+
+/* ---------- glass-rail (LEFT TOOL RAIL — identical terminal liquid glass) ----------
+   Sits on top of .glass. Overrides the HUD's blue-lifted --glass-float-base with
+   the NEUTRAL terminal tint token (same rgb+alpha the terminal body uses) so the
+   rail reads as one frosted glass surface with the z-29 BackdropFrost reveal that
+   useFrostRect(railRef,{radius:14}) already registers. Soft edges: near-invisible
+   frame hairline + a faint spec-only top sheen instead of a hard specular line. */
+.glass-rail {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(var(--glass-spec), 0.05) 0%,
+      rgba(var(--glass-spec), 0) 70%
+    ),
+    rgba(var(--glass-term-tint), var(--glass-term-alpha)); /* neutral 8,13,26 / 0.48 */
+  border-color: rgba(150, 175, 235, 0.05);                 /* near-invisible frame edge */
+  border-top-color: rgba(var(--glass-spec), 0.05);         /* soft sheen, no hard line */
+}
