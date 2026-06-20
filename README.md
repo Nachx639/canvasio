@@ -6,9 +6,13 @@
 
 **Command an army of AI coding agents from one infinite canvas — with your voice.**
 
-![Platform](https://img.shields.io/badge/platform-macOS-black) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Platform](https://img.shields.io/badge/platform-macOS-black) ![License](https://img.shields.io/badge/license-MIT-blue) ![Status](https://img.shields.io/badge/status-experimental-orange) ![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
 </div>
+
+> 🧪 **Experimental project — everyone is welcome to help!** CanvasIO is an early,
+> fast-moving experiment. Ideas, bug reports and pull requests are all welcome — see
+> [Contributing](#contributing) (and please skim the [PR security guide](docs/PR-SECURITY-REVIEW.md)).
 
 CanvasIO is a **macOS** desktop app: an **infinite canvas** where you orchestrate several AI
 coding agents at once (Claude Code, Codex, Cursor), each living in its own resizable
@@ -144,8 +148,10 @@ src/
 
 ## Contributing
 
-Pull requests are welcome — but open-source projects are increasingly attacked *through*
-their contribution workflow. **Before evaluating, approving or merging any PR, read the
+**This is an experimental project and contributions of all kinds are welcome** — issues,
+ideas, docs, fixes and features. New to the codebase? Open an issue to say hi or grab
+anything that interests you. Pull requests are very welcome — but open-source projects are
+increasingly attacked *through* their contribution workflow. **Before evaluating, approving or merging any PR, read the
 [Pull Request Security Review guide](docs/PR-SECURITY-REVIEW.md) (MUST READ).** It covers
 the current attack vectors (poisoned CI workflows, malicious dependencies/lockfiles,
 invisible-Unicode obfuscation, Electron-specific risks) and a concrete reviewer checklist.
