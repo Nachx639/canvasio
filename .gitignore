@@ -22,3 +22,6 @@ release.lock
 *.keystore
 *.mobileprovision
 id_rsa*
+
+# documento interno de auditoría/roadmap — fuera del repo público
+docs/AUDIT_CAPACIDADES.md
