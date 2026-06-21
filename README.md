@@ -167,7 +167,7 @@ are used here only nominatively. Audio stations are provided by [SomaFM](https:/
 
 ## Credits
 
-Some inspiration by **[cnvs.dev](https://cnvs.dev)** by **Mac Blade** — thanks for the spark. 🙏
+Some inspiration by **[cnvs.dev](https://cnvs.dev)** by **Max Blade** — thanks for the spark. 🙏
 
 ## License
 
