@@ -9,7 +9,8 @@ import {
   net,
   globalShortcut,
   dialog,
-  Notification
+  Notification,
+  nativeImage
 } from 'electron'
 import { join, isAbsolute, resolve as resolvePath, sep } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
@@ -600,6 +601,18 @@ const YT_PLAYER_HTML = `<!DOCTYPE html>
 app.whenReady().then(async () => {
   log('info', 'main', 'app:ready', { logPath: logPath(), platform: process.platform })
   nativeTheme.themeSource = 'dark'
+
+  // Dev-only: in production the .app bundle carries icon.icns, so the Dock shows
+  // the orb. Running `electron-vite dev` launches the generic Electron binary
+  // (no bundle), so macOS would otherwise show Electron's default icon. The
+  // BrowserWindow `icon` option does NOT affect the macOS Dock — app.dock.setIcon
+  // is the only way. We use build/icon-dev.png: the square master (icon.png) with
+  // the macOS squircle mask + 10% margin baked in, since macOS does NOT auto-round
+  // dock icons set this way. (Production keeps using the committed icon.icns.)
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    const dockIcon = nativeImage.createFromPath(join(__dirname, '../../build/icon-dev.png'))
+    if (!dockIcon.isEmpty()) app.dock?.setIcon(dockIcon)
+  }
 
   // CRITICAL (packaged app): merge the user's interactive-login PATH into
   // process.env BEFORE any spawn-based handler is registered. A Finder-launched
